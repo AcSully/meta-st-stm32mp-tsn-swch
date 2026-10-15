@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause)
+/*
+ * Device tree overlay enabling the internal DEIP Ethernet switch (TSN)
+ * on the ALIENTEK STM32MP257DAK3 board.
+ *
+ * Base DTB: stm32mp257d-stm32mp257dak3-mx.dtb (the CubeMX "dual ethernet"
+ * configuration). The board DTS keeps describing that plain configuration;
+ * this overlay is the only place that switches the board into TSN mode -
+ * the same split ST uses for stm32mp257f-ev1 + stm32mp25xx-ev1-swch.dts.
+ *
+ * Everything carried here is something the board DTS either lacks or
+ * describes the dual-ethernet way:
+ *
+ *   eth1   pinctrl-0/1 : the board DTS gives eth1 MDIO + RGMII groups, but
+ *                        the RGMII pins must move to switch0 - two nodes
+ *                        cannot own the same pin group
+ *          phy-mode    : the board DTS says "rgmii-id"; this link has no
+ *                        PHY left to add the internal delay
+ *          fixed-link  : the board DTS still waits for phy1_eth1
+ *          mdio1/phy@5 : the board DTS declares only phy@4
+ *   switch0             : the board DTS has the full node (pinctrl,
+ *                        phy-mode, st,ethsw-internal-125) inside "USER CODE
+ *                        BEGIN addons", with status = "disabled"
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "st,stm32mp257";
+
+	/* eth1 <-> switch endpoint port (sw0ep): fixed 1000M/full-duplex */
+	fragment@0 {
+		target = <&eth1>;
+
+		__overlay__ {
+			status = "okay";
+
+			/* Only MDIO stays with eth1: it carries the PHYs of
+			 * the switch ports, which are bound at runtime through
+			 * /sys/.../net/sw0pX/phy/mdiobus. */
+			pinctrl-names = "default", "sleep";
+			pinctrl-0 = <&eth1_mdio_pins_mx>;
+			pinctrl-1 = <&eth1_mdio_sleep_pins_mx>;
+
+			/* No PHY on this link any more, so no internal delay
+			 * (the board DTS says "rgmii-id"). */
+			phy-mode = "rgmii";
+
+			/* phy-handle = <&phy1_eth1> is left in place: stmmac
+			 * picks the fixed link whenever one is present, and
+			 * ST's EV1 overlay does the same. */
+			fixed-link {
+				speed = <1000>;
+				full-duplex;
+			};
+
+			/* Merges into the mdio1 already present in the board
+			 * DTS, which only declares phy@4. */
+			mdio1 {
+				/* Second switch port PHY, bound at runtime:
+				 *   echo stmmac-1:05 > /sys/.../net/sw0p2/phy/mdiobus
+				 *
+				 * No reset-gpios: PF3 is shared with phy@4, whose
+				 * own reset already releases both PHYs - declaring
+				 * the same line twice would make two consumers
+				 * fight over one GPIO.
+				 *
+				 * No motorcomm,clk-out-frequency-hz: the switch
+				 * generates its own 125M reference
+				 * (st,ethsw-internal-125 on &switch0), so this PHY
+				 * must not drive CLK125. */
+				ethernet-phy@5 {
+					compatible = "ethernet-phy-id4f51.e91b";
+					rx-internal-delay-ps = <1950>;
+					tx-internal-delay-ps = <1950>;
+					reg = <5>;
+				};
+			};
+		};
+	};
+
+	/* Enable the switch. Only the status changes here - exactly the shape
+	 * of stm32mp25xx-ev1-swch.dts. */
+	fragment@1 {
+		target = <&switch0>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+};
